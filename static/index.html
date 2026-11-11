@@ -88,7 +88,7 @@
 
   <div class="card">
     <b>上传文件</b>
-    <div class="hint">文件传到通用网盘自己的服务器，完成后生成公开分享链接，打开链接即可下载，不用登录。压缩包会自动解压。</div>
+    <div class="hint">文件传到通用网盘自己的服务器，完成后生成公开分享链接，打开链接即可下载，不用登录。压缩包会自动解压。发给买家时，可以在文件库里为该文件生成一次性链接，下载一次后失效。</div>
     <div id="dropZone" style="border:2px dashed #c8d6f5;border-radius:10px;padding:22px;text-align:center;color:#666;margin-top:10px;cursor:pointer">把文件拖到这里，或点击选择文件<input type="file" id="uploadInput" style="display:none"></div>
     <div id="uploadArea" style="display:none;margin-top:10px">
       <div class="jobinfo" id="uploadInfo"></div>
@@ -102,7 +102,11 @@
     <div class="err" id="uploadErr" style="display:none"></div>
     <div id="uploadShare" style="display:none;margin-top:10px">
       <div class="jobinfo">分享链接：<a class="dl" id="shareLink" href="#" target="_blank"></a></div>
-      <div class="row"><button class="secondary" onclick="copyShareLink()">复制分享链接</button></div>
+      <div class="row"><button class="secondary" onclick="copyShareLink()">复制分享链接</button><button class="secondary" onclick="createOneTimeLink(lastUploadId)">生成一次性链接</button></div>
+    </div>
+    <div id="oneTimeShare" style="display:none;margin-top:10px">
+      <div class="jobinfo">一次性链接：<a class="dl" id="oneTimeLink" href="#" target="_blank"></a></div>
+      <div class="row"><button class="secondary" onclick="copyOneTimeLink()">复制一次性链接</button></div>
     </div>
   </div>
 
@@ -266,7 +270,7 @@ function downloadPack() { window.open(`/api/tasks/${task.id}/archive`, "_blank")
 
 // ---------- 上传（分片，4MB/片，支持断点续传） ----------
 const CHUNK = 4 * 1024 * 1024;
-let upFile = null, upId = null, upTotal = 0, upReceived = new Set(), upAbort = false, upShareUrl = "";
+let upFile = null, upId = null, upTotal = 0, upReceived = new Set(), upAbort = false, upShareUrl = "", lastUploadId = "";
 
 function resumeKey(f) { return "unipan_upload_" + f.name + "_" + f.size; }
 function showUpErr(m) { const e = document.getElementById("uploadErr"); e.textContent = m; e.style.display = "block"; document.getElementById("uploadOk").style.display = "none"; }
@@ -284,6 +288,7 @@ upInput.addEventListener("change", () => { if (upInput.files.length) pickFile(up
 async function pickFile(f) {
   upFile = f; upAbort = false; hideUpMsg();
   document.getElementById("uploadShare").style.display = "none";
+  document.getElementById("oneTimeShare").style.display = "none";
   document.getElementById("uploadArea").style.display = "block";
   upTotal = Math.max(1, Math.ceil(f.size / CHUNK));
   // 续传：同一文件（同名同大小）之前记下的上传 id 还在，就先问缺哪些片
@@ -362,6 +367,7 @@ async function startUpload() {
     if (!r.ok) throw new Error(d.detail || "合并失败");
     localStorage.removeItem(resumeKey(upFile));
     upShareUrl = location.origin + d.share_url;
+    lastUploadId = d.upload_id;
     document.getElementById("shareLink").textContent = upShareUrl;
     document.getElementById("shareLink").href = d.share_url;
     document.getElementById("uploadShare").style.display = "block";
@@ -379,6 +385,43 @@ function copyShareLink() {
   else { const ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); showUpOk("分享链接已复制"); }
 }
 
+// ---------- 一次性下载链接 ----------
+function copyOnceLink(url) {
+  const t = url.startsWith("http") ? url : location.origin + url;
+  if (navigator.clipboard) navigator.clipboard.writeText(t);
+  else { const ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); }
+}
+function copyOneTimeLink() {
+  const el = document.getElementById("oneTimeLink");
+  if (el && el.getAttribute("href")) copyOnceLink(el.getAttribute("href"));
+}
+async function createOneTimeLink(uploadId) {
+  if (!uploadId) return;
+  try {
+    const r = await fetch(`/api/uploads/${uploadId}/one-time-links`, { method: "POST" });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || "生成失败");
+    const url = location.origin + d.url;
+    const el = document.getElementById("oneTimeLink");
+    if (el) { el.textContent = url; el.href = d.url; document.getElementById("oneTimeShare").style.display = "block"; }
+    loadLibrary();
+  } catch (e) { alert("生成一次性链接失败：" + e.message); }
+}
+async function revokeOneTimeLink(linkId) {
+  if (!confirm("确定作废该一次性链接吗？作废后链接立即失效。")) return;
+  await fetch(`/api/one-time-links/${linkId}`, { method: "DELETE" });
+  loadLibrary();
+}
+function oneTimeBlock(u) {
+  const links = u.one_time_links || [];
+  const rows = links.map(l => {
+    const full = location.origin + l.url;
+    const st = l.status === "used" ? "已使用" + (l.used_at ? "（" + fmtTime(l.used_at) + "）" : "") : "未使用";
+    return `<div style="margin-top:4px"><a class="dl" href="${l.url}" target="_blank">${esc(full)}</a>　${st}　<span class="muted">生成于 ${fmtTime(l.created_at)}</span> <a class="dl" href="#" onclick="copyOnceLink('${l.url}');return false">复制</a>${l.status === "unused" ? ` <a class="dl" href="#" onclick="revokeOneTimeLink('${l.id}');return false">作废</a>` : ""}</div>`;
+  }).join("");
+  return `<tr><td colspan="4" style="background:#fbfdff"><div class="muted" style="margin-bottom:2px">一次性链接（下载一次后失效）</div>${rows || "<span class='muted'>暂无一次性链接</span>"} <button class="secondary" style="padding:4px 10px;margin-top:4px" onclick="createOneTimeLink('${u.id}')">生成一次性链接</button></td></tr>`;
+}
+
 // ---------- 文件库 ----------
 async function loadLibrary() {
   const box = document.getElementById("libraryBox");
@@ -389,7 +432,7 @@ async function loadLibrary() {
     if (d.uploads && d.uploads.length) {
       html += "<b>上传的文件</b><table><thead><tr><th>文件</th><th style='width:90px'>大小</th><th style='width:90px'>状态</th><th style='width:150px'></th></tr></thead><tbody>";
       html += d.uploads.map(u => `<tr><td>${esc(u.name)}${u.extracted_count ? `<br><span class="muted">已解压 ${u.extracted_count} 个文件</span>` : ""}<br>${u.share_url ? `<a class="dl" href="${u.share_url}" target="_blank">分享页</a>` : ""}</td><td>${fmtSize(u.size)}</td><td>${u.status === "done" ? "完成" : u.status === "failed" ? "失败" : "上传中"}</td><td>
-        ${u.share_url ? `<a class="dl" href="${u.share_url}/file">下载原文件</a> ` : ""}${u.extracted_count ? `<a class="dl" href="${u.share_url}/archive">打包下载</a> ` : ""}<a class="dl" href="#" onclick="delUpload('${u.id}');return false">删除</a></td></tr>`).join("");
+        ${u.share_url ? `<a class="dl" href="${u.share_url}/file">下载原文件</a> ` : ""}${u.extracted_count ? `<a class="dl" href="${u.share_url}/archive">打包下载</a> ` : ""}<a class="dl" href="#" onclick="delUpload('${u.id}');return false">删除</a></td></tr>` + oneTimeBlock(u)).join("");
       html += "</tbody></table>";
     }
     if (d.tasks && d.tasks.length) {
