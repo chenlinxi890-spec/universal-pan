@@ -13,14 +13,14 @@ from pathlib import Path
 
 
 class Store:
-    """三类记录：uploads / tasks / jobs，均为 {id: dict}。"""
+    """四类记录：uploads / tasks / jobs / one_time_links，均为 {id: dict}。"""
 
     def __init__(self, data_dir: str | Path):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.path = self.data_dir / "store.json"
         self._lock = threading.Lock()
-        self._data: dict[str, dict] = {"uploads": {}, "tasks": {}, "jobs": {}}
+        self._data: dict[str, dict] = {"uploads": {}, "tasks": {}, "jobs": {}, "one_time_links": {}}
         self._load()
 
     # ---------- 基础 ----------
@@ -32,12 +32,12 @@ class Store:
             with open(self.path, "r", encoding="utf-8") as f:
                 raw = json.load(f)
             if isinstance(raw, dict):
-                for k in ("uploads", "tasks", "jobs"):
+                for k in ("uploads", "tasks", "jobs", "one_time_links"):
                     if isinstance(raw.get(k), dict):
                         self._data[k] = raw[k]
         except (OSError, ValueError):
             # 损坏的 store 不阻塞启动；下次保存时重建
-            self._data = {"uploads": {}, "tasks": {}, "jobs": {}}
+            self._data = {"uploads": {}, "tasks": {}, "jobs": {}, "one_time_links": {}}
 
     def _save(self) -> None:
         tmp = self.path.with_suffix(".json.tmp")
@@ -115,3 +115,29 @@ class Store:
             key=lambda r: r.get("created_at", 0),
             reverse=True,
         )
+
+    # ---------- one_time_links ----------
+
+    def upsert_one_time_link(self, rec: dict) -> dict:
+        return self._upsert("one_time_links", rec)
+
+    def get_one_time_link(self, link_id: str) -> dict | None:
+        return self._data["one_time_links"].get(link_id)
+
+    def delete_one_time_link(self, link_id: str) -> bool:
+        return self._delete("one_time_links", link_id)
+
+    def one_time_links_for_upload(self, upload_id: str) -> list[dict]:
+        return sorted(
+            (r for r in self._data["one_time_links"].values() if r.get("upload_id") == upload_id),
+            key=lambda r: r.get("created_at", 0),
+            reverse=True,
+        )
+
+    def delete_one_time_links_for_upload(self, upload_id: str) -> None:
+        with self._lock:
+            doomed = [k for k, r in self._data["one_time_links"].items() if r.get("upload_id") == upload_id]
+            for k in doomed:
+                del self._data["one_time_links"][k]
+            if doomed:
+                self._save()

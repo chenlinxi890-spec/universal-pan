@@ -11,6 +11,11 @@
     GET  /api/tasks/{id}/files    已下载 + 已解压文件列表
     GET  /api/tasks/{id}/file     ?dir=download|extracted&path=... 下载单个文件
     GET  /api/tasks/{id}/archive  打包下载全部解压结果（zip）
+    POST /api/uploads/{id}/one-time-links  给上传生成一次性下载链接
+    GET  /api/uploads/{id}/one-time-links  列出某上传的一次性链接
+    DELETE /api/one-time-links/{id}         作废一次性链接
+    GET  /once/{id}               一次性链接分享页（只提供下载原文件）
+    GET  /once/{id}/file         一次性下载原文件（完整传完才算用掉）
 
 只下载用户提供的分享链接；不登录、不转存、不破解、不绕限速。
 """
@@ -27,13 +32,13 @@ import urllib.parse
 import zipfile
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import downloader, extractor
-from .models import Job, ProviderError, ShareFile, Task, Upload, new_id
+from .models import Job, OneTimeLink, ProviderError, ShareFile, Task, Upload, new_id
 from .providers import PLATFORM_NAMES, detect, get_provider
 from .store import Store
 
@@ -49,6 +54,10 @@ app = FastAPI(title="通用网盘", version="0.1.0")
 
 TASKS: dict[str, Task] = {}
 JOBS: dict[str, Job] = {}
+
+# 正在下载中的一次性链接 id。同一链接同一时间只允许一个下载在途，
+# 防止并行请求绕过“一次”的限制；下载结束（无论成功还是中断）即移除。
+ONE_TIME_IN_FLIGHT: set[str] = set()
 
 
 # ---------- 工具 ----------
@@ -671,6 +680,182 @@ async def share_download_archive(share_id: str):
     )
 
 
+# ---------- 一次性下载链接 ----------
+
+def _once_page_html(title: str, inner: str, status_code: int = 200) -> HTMLResponse:
+    body = f"""<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{html.escape(title)} - 通用网盘</title>
+<style>body{{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f4f6fa;color:#222;margin:0}}
+.wrap{{max-width:720px;margin:0 auto;padding:24px 16px}}.card{{background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.06)}}
+a{{color:#1a73e8}}h1{{font-size:20px;word-break:break-all}}.muted{{color:#888;font-size:13px}}
+.notice{{background:#fef7e0;border:1px solid #f9d976;border-radius:8px;padding:10px 12px;font-size:14px;margin:12px 0}}
+.btn{{display:inline-block;background:#1a73e8;color:#fff;border-radius:8px;padding:12px 22px;font-size:15px;text-decoration:none;margin-top:8px}}</style></head>
+<body><div class="wrap"><div class="card">
+{inner}
+<p class="muted">通用网盘 · 一次性下载链接</p>
+</div></div></body></html>"""
+    return HTMLResponse(body, status_code=status_code)
+
+
+@app.post("/api/uploads/{upload_id}/one-time-links")
+async def create_one_time_link(upload_id: str):
+    rec = _get_upload_rec(upload_id)
+    if rec.get("status") != "done":
+        raise HTTPException(400, "该上传尚未完成，无法生成一次性链接")
+    link = OneTimeLink(
+        id=new_id(),
+        upload_id=upload_id,
+        name=rec.get("name") or "",
+        size=int(rec.get("size") or 0),
+    )
+    STORE.upsert_one_time_link(link.to_dict())
+    return link.to_dict()
+
+
+@app.get("/api/uploads/{upload_id}/one-time-links")
+async def list_one_time_links(upload_id: str):
+    _get_upload_rec(upload_id)
+    return {"links": STORE.one_time_links_for_upload(upload_id)}
+
+
+@app.delete("/api/one-time-links/{link_id}")
+async def revoke_one_time_link(link_id: str):
+    if not STORE.get_one_time_link(link_id):
+        raise HTTPException(404, "一次性链接不存在")
+    STORE.delete_one_time_link(link_id)
+    return {"ok": True}
+
+
+@app.get("/once/{link_id}", response_class=HTMLResponse)
+async def once_page(link_id: str):
+    link = STORE.get_one_time_link(link_id)
+    if not link:
+        return _once_page_html(
+            "链接不存在",
+            "<h1>链接不存在或已作废</h1>"
+            "<p>该一次性链接不存在，或者已被作废。</p>",
+            status_code=404,
+        )
+    name = html.escape(link.get("name") or "")
+    size = fmt_size(int(link.get("size") or 0))
+    created = time.strftime("%Y-%m-%d %H:%M", time.localtime(link.get("created_at") or 0))
+    if link.get("status") == "used":
+        used = time.strftime("%Y-%m-%d %H:%M", time.localtime(link.get("used_at") or 0))
+        return _once_page_html(
+            "链接已失效",
+            f"<h1>📄 {name}</h1>"
+            f"<p class=\"muted\">大小：{size}　生成时间：{created}　使用时间：{used}</p>"
+            "<div class=\"notice\">链接已使用过，已失效。</div>"
+            "<p>一次性链接只允许下载一次，下载完成后即失效。如需再次下载，请联系链接提供方重新生成。</p>",
+            status_code=410,
+        )
+    return _once_page_html(
+        f"{link.get('name') or ''} - 一次性下载",
+        f"<h1>📄 {name}</h1>"
+        f"<p class=\"muted\">大小：{size}　生成时间：{created}</p>"
+        "<div class=\"notice\">一次性链接，下载一次后失效。下载完整传完后，链接自动失效；"
+        "下载中途中断，链接仍然有效。</div>"
+        f"<p><a class=\"btn\" href=\"/once/{html.escape(link_id)}/file\">⬇ 下载原文件</a></p>",
+    )
+
+
+class _OneTimeDownloadResponse(Response):
+    """一次性下载响应：自己掌控发送循环。
+
+    只有整份文件的最后一个字节成功发出，才把链接标为已使用；
+    发送中途客户端断开或出错，链接保持未使用，可再次下载。
+    （uvicorn 的 send() 在断开后静默返回不抛异常，因此另起任务监听
+    receive() 的 http.disconnect 消息来发现中途断开。）
+    """
+
+    def __init__(self, file_path: Path, filename: str, link_id: str):
+        self.file_path = file_path
+        self.filename = filename
+        self.link_id = link_id
+        self.size = file_path.stat().st_size
+        super().__init__(
+            media_type="application/octet-stream",
+            headers={
+                "Content-Length": str(self.size),
+                "Content-Disposition": f"attachment; filename*=UTF-8''{urllib.parse.quote(filename)}",
+            },
+        )
+
+    async def __call__(self, scope, receive, send):
+        ONE_TIME_IN_FLIGHT.add(self.link_id)
+        # 注意：uvicorn 的 send() 在客户端断开后是静默返回，不抛异常，
+        # 光靠“发送循环走完了”无法判断对方是否收完。必须另起任务监听
+        # receive() 的 http.disconnect 消息，中途断开就立即停发、不标记。
+        disconnected = asyncio.Event()
+
+        async def watch_disconnect():
+            try:
+                while True:
+                    msg = await receive()
+                    if msg["type"] == "http.disconnect":
+                        disconnected.set()
+                        return
+            except Exception:
+                disconnected.set()
+
+        watcher = asyncio.create_task(watch_disconnect())
+        try:
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": self.raw_headers,
+            })
+            sent = 0
+            with open(self.file_path, "rb") as f:
+                while True:
+                    if disconnected.is_set():
+                        return
+                    chunk = await asyncio.to_thread(f.read, 1024 * 1024)
+                    if not chunk:
+                        break
+                    if disconnected.is_set():
+                        return
+                    await send({"type": "http.response.body", "body": chunk, "more_body": True})
+                    sent += len(chunk)
+            if disconnected.is_set():
+                return
+            await send({"type": "http.response.body", "body": b"", "more_body": False})
+            if sent == self.size:
+                fresh = STORE.get_one_time_link(self.link_id)
+                if fresh and fresh.get("status") == "unused":
+                    fresh["status"] = "used"
+                    fresh["used_at"] = time.time()
+                    STORE.upsert_one_time_link(fresh)
+        finally:
+            ONE_TIME_IN_FLIGHT.discard(self.link_id)
+            if not watcher.done():
+                watcher.cancel()
+
+
+@app.api_route("/once/{link_id}/file", methods=["GET", "HEAD"])
+async def once_download_file(link_id: str, request: Request):
+    link = STORE.get_one_time_link(link_id)
+    if not link:
+        raise HTTPException(404, "链接不存在或已作废")
+    if link.get("status") == "used":
+        raise HTTPException(410, "链接已使用过，已失效")
+    if link_id in ONE_TIME_IN_FLIGHT:
+        raise HTTPException(409, "该链接正在下载中，请稍后再试")
+    rec = STORE.get_upload(link["upload_id"])
+    orig = _original_file(rec) if rec else None
+    if not rec or rec.get("status") != "done" or not orig:
+        raise HTTPException(404, "文件不存在或已删除")
+    size = orig.stat().st_size
+    if request.method == "HEAD":
+        # 只取响应头，不消耗链接
+        return Response(headers={
+            "Content-Length": str(size),
+            "Content-Disposition": f"attachment; filename*=UTF-8''{urllib.parse.quote(orig.name)}",
+        })
+    return _OneTimeDownloadResponse(orig, orig.name, link_id)
+
+
 # ---------- 文件管理 / 任务历史 ----------
 
 @app.get("/api/library")
@@ -685,6 +870,7 @@ async def list_library():
             "share_url": f"/share/{rec['share_id']}" if rec.get("share_id") else "",
             "original": {"path": orig.name, "size": orig.stat().st_size} if orig else None,
             "extracted": extractor.list_tree(str(base / "extracted")),
+            "one_time_links": STORE.one_time_links_for_upload(uid),
         })
     tasks = []
     tasks_root = DATA_DIR / "tasks"
@@ -715,6 +901,7 @@ async def delete_upload(upload_id: str):
         raise HTTPException(404, "上传不存在")
     shutil.rmtree(upload_dir(upload_id), ignore_errors=True)
     shutil.rmtree(upload_tmp_dir(upload_id), ignore_errors=True)
+    STORE.delete_one_time_links_for_upload(upload_id)
     STORE.delete_upload(upload_id)
     return {"ok": True}
 

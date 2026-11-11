@@ -113,6 +113,35 @@ class Upload:
 
 
 @dataclass
+class OneTimeLink:
+    """一次性下载链接：只允许一次完整下载原文件。
+
+    状态：unused（未使用）/ used（已使用）。作废 = 删除记录。
+    只有整份文件完整传完才标为已使用；中途断开不算用掉。
+    """
+
+    id: str
+    upload_id: str
+    name: str = ""
+    size: int = 0
+    status: str = "unused"
+    created_at: float = field(default_factory=time.time)
+    used_at: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "upload_id": self.upload_id,
+            "name": self.name,
+            "size": self.size,
+            "status": self.status,
+            "url": f"/once/{self.id}",
+            "created_at": self.created_at,
+            "used_at": self.used_at,
+        }
+
+
+@dataclass
 class Task:
     id: str
     platform: str
