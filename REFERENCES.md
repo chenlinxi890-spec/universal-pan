@@ -13,6 +13,7 @@
   （百度 `sharedownload` 取链流程、`tplconfig` 签名接口）。
 - **BaiduPCS-Go** — https://github.com/qjfoidnh/BaiduPCS-Go（百度接口参考）
 - **quarkdownloaderpro** — https://github.com/OP404OP/quarkdownloaderpro（夸克接口参考）
-- **tickstep/aliyunpan** — https://github.com/tickstep/aliyunpan（阿里云盘接口参考，后续）
+- **tickstep/aliyunpan** — https://github.com/tickstep/aliyunpan（阿里云盘游客分享接口参考：get_share_token / list_by_anonymous / get_share_link_download_url）
+- **天翼云盘 189 公开接口**（getShareInfoByCode / listShareDir / checkAccessCode；取链需登录签名，本工具不实现）
 
 本项目本身同样以 AGPL-3.0 开源。
