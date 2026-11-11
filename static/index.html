@@ -52,7 +52,7 @@
     </div>
     <div class="err" id="errBox"></div>
     <div class="ok" id="okBox"></div>
-    <div class="hint">支持的分享链接：百度网盘、夸克网盘、UC、迅雷、139云盘、123盘、115、光鸭、蓝奏云。提取码会自动从链接或文案里识别，不用单独填。只下载你提供的分享文件；需要登录才能下的分享会明确告诉你。</div>
+    <div class="hint">支持的分享链接：百度网盘、夸克网盘、UC、迅雷、139云盘、123盘、115、光鸭、蓝奏云、阿里云盘、天翼云盘。提取码会自动从链接或文案里识别，不用单独填。只下载你提供的分享文件；需要登录才能下的分享会明确告诉你。</div>
   </div>
 
   <div class="card" id="fileCard" style="display:none">
@@ -84,6 +84,36 @@
       <thead><tr><th>文件</th><th style="width:90px">大小</th><th style="width:60px"></th></tr></thead>
       <tbody id="resultList"></tbody>
     </table>
+  </div>
+
+  <div class="card">
+    <b>上传文件</b>
+    <div class="hint">文件传到通用网盘自己的服务器，完成后生成公开分享链接，打开链接即可下载，不用登录。压缩包会自动解压。</div>
+    <div id="dropZone" style="border:2px dashed #c8d6f5;border-radius:10px;padding:22px;text-align:center;color:#666;margin-top:10px;cursor:pointer">把文件拖到这里，或点击选择文件<input type="file" id="uploadInput" style="display:none"></div>
+    <div id="uploadArea" style="display:none;margin-top:10px">
+      <div class="jobinfo" id="uploadInfo"></div>
+      <div class="bar"><div id="uploadBar"></div></div>
+      <div class="row">
+        <button id="uploadStartBtn" onclick="startUpload()">开始上传</button>
+        <button class="secondary" onclick="cancelUpload()">取消</button>
+      </div>
+    </div>
+    <div class="ok" id="uploadOk" style="display:none"></div>
+    <div class="err" id="uploadErr" style="display:none"></div>
+    <div id="uploadShare" style="display:none;margin-top:10px">
+      <div class="jobinfo">分享链接：<a class="dl" id="shareLink" href="#" target="_blank"></a></div>
+      <div class="row"><button class="secondary" onclick="copyShareLink()">复制分享链接</button></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin:0 0 8px;justify-content:space-between"><b>文件库</b><button class="secondary" onclick="loadLibrary()">刷新</button></div>
+    <div id="libraryBox" class="muted">加载中…</div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin:0 0 8px;justify-content:space-between"><b>任务历史</b><button class="secondary" onclick="loadHistory()">刷新</button></div>
+    <div id="historyBox" class="muted">加载中…</div>
   </div>
 
   <div class="footer">通用网盘 · 免费工具 · 只下载你提供的分享链接<br>百度非会员下载本身限速，如实呈现，不绕过。</div>
@@ -233,6 +263,175 @@ async function loadResults() {
     <td><a class="dl" href="/api/tasks/${task.id}/file?dir=${dir}&path=${encodeURIComponent(f.path)}" download>下载</a></td></tr>`).join("");
 }
 function downloadPack() { window.open(`/api/tasks/${task.id}/archive`, "_blank"); }
+
+// ---------- 上传（分片，4MB/片，支持断点续传） ----------
+const CHUNK = 4 * 1024 * 1024;
+let upFile = null, upId = null, upTotal = 0, upReceived = new Set(), upAbort = false, upShareUrl = "";
+
+function resumeKey(f) { return "unipan_upload_" + f.name + "_" + f.size; }
+function showUpErr(m) { const e = document.getElementById("uploadErr"); e.textContent = m; e.style.display = "block"; document.getElementById("uploadOk").style.display = "none"; }
+function showUpOk(m) { const e = document.getElementById("uploadOk"); e.textContent = m; e.style.display = "block"; document.getElementById("uploadErr").style.display = "none"; }
+function hideUpMsg() { document.getElementById("uploadErr").style.display = "none"; document.getElementById("uploadOk").style.display = "none"; }
+
+const dz = document.getElementById("dropZone");
+const upInput = document.getElementById("uploadInput");
+dz.addEventListener("click", () => upInput.click());
+dz.addEventListener("dragover", e => { e.preventDefault(); dz.style.borderColor = "#1a73e8"; });
+dz.addEventListener("dragleave", () => dz.style.borderColor = "#c8d6f5");
+dz.addEventListener("drop", e => { e.preventDefault(); dz.style.borderColor = "#c8d6f5"; if (e.dataTransfer.files.length) pickFile(e.dataTransfer.files[0]); });
+upInput.addEventListener("change", () => { if (upInput.files.length) pickFile(upInput.files[0]); });
+
+async function pickFile(f) {
+  upFile = f; upAbort = false; hideUpMsg();
+  document.getElementById("uploadShare").style.display = "none";
+  document.getElementById("uploadArea").style.display = "block";
+  upTotal = Math.max(1, Math.ceil(f.size / CHUNK));
+  // 续传：同一文件（同名同大小）之前记下的上传 id 还在，就先问缺哪些片
+  upId = null; upReceived = new Set();
+  const saved = localStorage.getItem(resumeKey(f));
+  if (saved) {
+    try {
+      const r = await fetch(`/api/uploads/${saved}/chunks`);
+      if (r.ok) {
+        const d = await r.json();
+        if (d.status === "uploading" && d.total_chunks === upTotal) {
+          upId = saved; upReceived = new Set(d.received);
+        }
+      }
+    } catch (e) { /* 续传查询失败就重新传 */ }
+  }
+  const done = upReceived.size;
+  document.getElementById("uploadInfo").textContent = `待上传：${f.name}（${fmtSize(f.size)}，共 ${upTotal} 片${done ? "，已传 " + done + " 片，可断点续传" : ""}）`;
+  document.getElementById("uploadBar").style.width = (done / upTotal * 100).toFixed(1) + "%";
+  document.getElementById("uploadStartBtn").textContent = done ? "继续上传" : "开始上传";
+}
+
+function xhrPost(url, form, onProgress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", url);
+    if (onProgress && x.upload) x.upload.onprogress = e => { if (e.lengthComputable) onProgress(e.loaded, e.total); };
+    x.onload = () => { try { resolve({ ok: x.status < 300, status: x.status, data: JSON.parse(x.responseText) }); } catch (e) { resolve({ ok: false, status: x.status, data: {} }); } };
+    x.onerror = () => reject(new Error("网络错误"));
+    x.send(form);
+  });
+}
+
+async function startUpload() {
+  if (!upFile) return;
+  hideUpMsg();
+  const btn = document.getElementById("uploadStartBtn");
+  btn.disabled = true;
+  try {
+    if (!upId) {
+      const r = await fetch("/api/uploads/init", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: upFile.name, size: upFile.size, total_chunks: upTotal }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || "初始化上传失败");
+      upId = d.upload_id;
+      localStorage.setItem(resumeKey(upFile), upId);
+    }
+    for (let i = 0; i < upTotal; i++) {
+      if (upAbort) throw new Error("已取消上传");
+      if (upReceived.has(i)) continue;
+      const blob = upFile.slice(i * CHUNK, Math.min(upFile.size, (i + 1) * CHUNK));
+      let sent = false, tries = 0;
+      while (!sent && tries < 3) {
+        tries++;
+        const form = new FormData();
+        form.append("index", String(i));
+        form.append("chunk", blob, upFile.name + ".part" + i);
+        try {
+          const res = await xhrPost(`/api/uploads/${upId}/chunk`, form, (loaded, total) => {
+            const pct = ((i * CHUNK + loaded) / upFile.size * 100);
+            document.getElementById("uploadBar").style.width = pct.toFixed(1) + "%";
+            document.getElementById("uploadInfo").textContent = `上传中：${upFile.name}　第 ${i + 1}/${upTotal} 片（第 ${tries} 次尝试）`;
+          });
+          if (!res.ok) throw new Error(res.data.detail || ("分片 " + i + " 上传失败"));
+          upReceived = new Set(res.data.received || []);
+          sent = true;
+        } catch (e) {
+          if (tries >= 3) throw e;
+          await new Promise(r => setTimeout(r, 1000 * tries));
+        }
+      }
+      document.getElementById("uploadBar").style.width = ((i + 1) / upTotal * 100).toFixed(1) + "%";
+    }
+    document.getElementById("uploadInfo").textContent = "分片传完，正在合并并解压…";
+    const r = await fetch(`/api/uploads/${upId}/complete`, { method: "POST" });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || "合并失败");
+    localStorage.removeItem(resumeKey(upFile));
+    upShareUrl = location.origin + d.share_url;
+    document.getElementById("shareLink").textContent = upShareUrl;
+    document.getElementById("shareLink").href = d.share_url;
+    document.getElementById("uploadShare").style.display = "block";
+    showUpOk(`上传完成：${d.name}（${fmtSize(d.size)}）${d.extracted_count ? "，已解压 " + d.extracted_count + " 个文件" : ""}`);
+    loadLibrary(); loadHistory();
+  } catch (e) {
+    if (e.message !== "已取消上传") showUpErr(e.message + (upId ? "（已传分片已保存，重新选择同一文件可断点续传）" : ""));
+  }
+  btn.disabled = false;
+}
+function cancelUpload() { upAbort = true; }
+function copyShareLink() {
+  const t = upShareUrl;
+  if (navigator.clipboard) navigator.clipboard.writeText(t).then(() => showUpOk("分享链接已复制"));
+  else { const ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); showUpOk("分享链接已复制"); }
+}
+
+// ---------- 文件库 ----------
+async function loadLibrary() {
+  const box = document.getElementById("libraryBox");
+  try {
+    const r = await fetch("/api/library");
+    const d = await r.json();
+    let html = "";
+    if (d.uploads && d.uploads.length) {
+      html += "<b>上传的文件</b><table><thead><tr><th>文件</th><th style='width:90px'>大小</th><th style='width:90px'>状态</th><th style='width:150px'></th></tr></thead><tbody>";
+      html += d.uploads.map(u => `<tr><td>${esc(u.name)}${u.extracted_count ? `<br><span class="muted">已解压 ${u.extracted_count} 个文件</span>` : ""}<br>${u.share_url ? `<a class="dl" href="${u.share_url}" target="_blank">分享页</a>` : ""}</td><td>${fmtSize(u.size)}</td><td>${u.status === "done" ? "完成" : u.status === "failed" ? "失败" : "上传中"}</td><td>
+        ${u.share_url ? `<a class="dl" href="${u.share_url}/file">下载原文件</a> ` : ""}${u.extracted_count ? `<a class="dl" href="${u.share_url}/archive">打包下载</a> ` : ""}<a class="dl" href="#" onclick="delUpload('${u.id}');return false">删除</a></td></tr>`).join("");
+      html += "</tbody></table>";
+    }
+    if (d.tasks && d.tasks.length) {
+      html += "<b style='display:block;margin-top:12px'>已下载的分享</b><table><thead><tr><th>分享</th><th style='width:90px'>文件</th><th style='width:150px'></th></tr></thead><tbody>";
+      html += d.tasks.map(t => `<tr><td>${esc(t.title || t.id)}<br><span class="muted">${esc(t.platform_name || t.platform || "")}</span></td><td>${(t.downloaded || []).length} 已下载 / ${(t.extracted || []).length} 已解压</td><td>
+        ${(t.extracted || []).length ? `<a class="dl" href="/api/tasks/${t.id}/archive">打包下载</a> ` : ""}<a class="dl" href="#" onclick="delTask('${t.id}');return false">删除</a></td></tr>`).join("");
+      html += "</tbody></table>";
+    }
+    box.innerHTML = html || "暂无文件：上传文件或下载分享后会出现在这里。";
+  } catch (e) { box.textContent = "加载失败：" + e.message; }
+}
+async function delUpload(id) {
+  if (!confirm("确定删除该上传及全部文件吗？分享链接将失效。")) return;
+  await fetch(`/api/uploads/${id}`, { method: "DELETE" });
+  loadLibrary(); loadHistory();
+}
+async function delTask(id) {
+  if (!confirm("确定删除该下载任务及全部文件吗？")) return;
+  await fetch(`/api/tasks/${id}`, { method: "DELETE" });
+  loadLibrary(); loadHistory();
+}
+
+// ---------- 任务历史 ----------
+function fmtTime(ts) { if (!ts) return "-"; const d = new Date(ts * 1000); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0") + " " + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); }
+function statusText(s) { return { done: "完成", failed: "失败", running: "进行中", pending: "等待中", ready: "已解析" }[s] || s; }
+async function loadHistory() {
+  const box = document.getElementById("historyBox");
+  try {
+    const r = await fetch("/api/history");
+    const d = await r.json();
+    const rows = [];
+    (d.jobs || []).forEach(j => rows.push({ t: j.created_at, kind: j.kind === "download" ? "下载" : j.kind, text: (j.message || "") + (j.status === "failed" ? "（失败）" : ""), status: j.status }));
+    (d.tasks || []).forEach(t => rows.push({ t: t.created_at, kind: "解析", text: (t.platform_name || t.platform || "") + "「" + (t.title || "") + "」", status: t.status }));
+    rows.sort((a, b) => b.t - a.t);
+    box.innerHTML = rows.length ? `<table><thead><tr><th style="width:130px">时间</th><th style="width:60px">类型</th><th>内容</th><th style="width:70px">状态</th></tr></thead><tbody>` +
+      rows.map(x => `<tr><td>${fmtTime(x.t)}</td><td>${esc(x.kind)}</td><td>${esc(x.text)}</td><td>${statusText(x.status)}</td></tr>`).join("") + "</tbody></table>"
+      : "暂无任务记录。";
+  } catch (e) { box.textContent = "加载失败：" + e.message; }
+}
+loadLibrary();
+loadHistory();
+
 </script>
 </body>
 </html>
