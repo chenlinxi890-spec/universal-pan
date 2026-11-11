@@ -57,11 +57,11 @@ class Provider:
             follow_redirects=True,
             timeout=httpx.Timeout(120.0, connect=30.0),
             proxy=proxy or None,
-            # 必须关掉 trust_env：本机 no_proxy 里有裸 IPv6（::1）写法，
+            # 必须关掉 trust_env：no_proxy 里有裸 IPv6（::1）写法，
             # httpx 解析环境代理时会把它当 URL 拼而报错 "Invalid port"
             trust_env=False,
-            # 本机出口代理做 TLS 拦截，CA 在 SSL_CERT_FILE 里；
-            # 笔记本上无此变量时走系统默认 CA
+            # 代理环境做 TLS 拦截，CA 在 SSL_CERT_FILE 里；
+            # 无此变量时走系统默认 CA
             verify=os.environ.get("SSL_CERT_FILE") or True,
         )
 

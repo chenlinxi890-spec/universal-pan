@@ -16,7 +16,7 @@
       虽然返回 errno 0 与 dlink，但 dlink 的 dstime = 签名时间 - 3600、
       expires=1h，即签发即过期；用它下载一律 403
       {"error_code":31360,"error_msg":"expire time out error"}，
-      与 UA/Cookie/Referer/clienttype/app_id 无关，各百度服务器时钟与本机
+      与 UA/Cookie/Referer/clienttype/app_id 无关，各百度服务器时钟与本地时钟
       相差 <1s、非时钟问题；sign 绑定 tplconfig 时间戳，改时间戳报 113。
       filemetas 需登录（errno -6）。结论：游客只能解析列表，下载需登录。
       本工具如实报错，不走第三方代下服务。
