@@ -82,6 +82,37 @@ class Job:
 
 
 @dataclass
+class Upload:
+    """用户上传到本站服务器的文件（只存元数据，文件在磁盘上）。"""
+
+    id: str
+    name: str
+    size: int = 0
+    status: str = "uploading"  # uploading / done / failed
+    share_id: str = ""
+    total_chunks: int = 0
+    extracted_count: int = 0
+    extracted_bytes: int = 0
+    error: str = ""
+    created_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "size": self.size,
+            "status": self.status,
+            "share_id": self.share_id,
+            "share_url": f"/share/{self.share_id}" if self.share_id else "",
+            "total_chunks": self.total_chunks,
+            "extracted_count": self.extracted_count,
+            "extracted_bytes": self.extracted_bytes,
+            "error": self.error,
+            "created_at": self.created_at,
+        }
+
+
+@dataclass
 class Task:
     id: str
     platform: str
