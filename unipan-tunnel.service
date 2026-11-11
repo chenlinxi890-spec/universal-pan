@@ -1,0 +1,16 @@
+[Unit]
+Description=Universal Pan (universal-pan) Cloudflare quick tunnel
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jingle
+ExecStart=/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:8000 --no-autoupdate
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
