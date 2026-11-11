@@ -4,7 +4,8 @@
 提取码来源优先级：链接里的 pwd=/password= 参数 > 文案里的“提取码/访问码/密码：xxxx”。
 
 平台：quark 夸克、uc UC、xunlei 迅雷、baidu 百度、c139 139云、pan123 123盘、
-pan115 115、guangya 光鸭、ilanzou 蓝奏云优享版、lanzou 蓝奏云。
+pan115 115、guangya 光鸭、aliyun 阿里云盘、tianyi 天翼云盘、
+ilanzou 蓝奏云优享版、lanzou 蓝奏云。
 """
 from __future__ import annotations
 
@@ -25,6 +26,9 @@ PAN115_RE = re.compile(r"115(?:cdn|rc)?\.com/s/(sw[A-Za-z0-9]+)", re.I)
 PAN115_CMD_RE = re.compile(r"115(?:cdn|rc)?\.com/(sw[A-Za-z0-9]{8,})-([A-Za-z0-9]{4,8})", re.I)
 PWD_115_URL_RE = re.compile(r"[?&]password=([A-Za-z0-9]+)")
 GUANGYA_RE = re.compile(r"guangyapan\.com/s/([A-Za-z0-9_-]+)", re.I)
+ALIYUN_RE = re.compile(r"(?:www\.)?(?:alipan|aliyundrive)\.com/s/([A-Za-z0-9_-]+)", re.I)
+TIANYI_RE = re.compile(r"cloud\.189\.cn/t/([A-Za-z0-9]+)", re.I)
+TIANYI_WEB_RE = re.compile(r"cloud\.189\.cn/web/share\?code=([A-Za-z0-9]+)", re.I)
 ILANZOU_RE = re.compile(r"(?:^|[/.])ilanzou\.(?:com|net|org|cn)/s/([A-Za-z0-9_-]+)", re.I)
 LANZOU_RE = re.compile(
     r"(?:^|[/.])(?:lanzou[a-z0-9-]*|lan[zs]o[ux])\.(?:com|net|org|cn)/([A-Za-z0-9]+)", re.I
@@ -42,6 +46,8 @@ PLATFORM_NAMES = {
     "pan123": "123盘",
     "pan115": "115网盘",
     "guangya": "光鸭云盘",
+    "aliyun": "阿里云盘",
+    "tianyi": "天翼云盘",
     "ilanzou": "蓝奏云优享版",
     "lanzou": "蓝奏云",
 }
@@ -111,6 +117,13 @@ def parse(text: str) -> Optional[ParsedLink]:
     mm = GUANGYA_RE.search(url)
     if mm:
         return ParsedLink("guangya", mm.group(1), _pwd_from_url(url, text), url)
+    mm = ALIYUN_RE.search(url)
+    if mm:
+        return ParsedLink("aliyun", mm.group(1), _pwd_from_url(url, text), url)
+    for rx in (TIANYI_WEB_RE, TIANYI_RE):
+        mm = rx.search(url)
+        if mm:
+            return ParsedLink("tianyi", mm.group(1), _pwd_from_url(url, text), url)
     # 优享版先于蓝奏云判断，避免 www.ilanzou.com 被误判
     mm = ILANZOU_RE.search(url)
     if mm:
