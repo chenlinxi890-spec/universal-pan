@@ -124,7 +124,7 @@ async def download(
         ),
         # 同 base.py：no_proxy 里的裸 IPv6 会让 httpx 解析环境代理时报错
         trust_env=False,
-        # 出口代理 TLS 拦截的 CA（本机）；笔记本上走系统默认 CA
+        # 代理环境 TLS 拦截的 CA；无此变量时走系统默认 CA
         verify=os.environ.get("SSL_CERT_FILE") or True,
     ) as client:
         size, supports_range = await _head_size(client, url, headers)

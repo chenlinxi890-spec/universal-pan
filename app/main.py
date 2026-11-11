@@ -326,7 +326,7 @@ async def _run_download(job: Job, task: Task, items: list[dict]) -> None:
         if not msg.startswith("下载失败"):
             msg = f"下载失败：{msg}"
         # 百度 31360：免登录直链签发即过期（dstime=签名时间-1h，expires=1h），
-        # 2026-11-11 在笔记本上多轮实测均如此，非本工具的问题
+        # 多轮实测均如此，非本工具的问题
         if "31360" in msg or "expire time out" in msg:
             msg += (
                 " —— 百度已限制免登录下载：直链签发即过期，"
