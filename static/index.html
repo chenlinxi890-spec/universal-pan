@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>通用网盘 - 粘贴链接就能下载解压</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f4f6fa; color: #222; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 18px 14px 60px; }
+  h1 { font-size: 22px; margin: 6px 0 2px; }
+  .sub { color: #666; font-size: 13px; margin-bottom: 14px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  .chip { font-size: 12px; padding: 4px 10px; border-radius: 20px; background: #e8f0fe; color: #1a73e8; }
+  .chip.todo { background: #eee; color: #999; }
+  .card { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+  textarea { width: 100%; min-height: 64px; border: 1px solid #ddd; border-radius: 8px; padding: 10px; font-size: 14px; resize: vertical; }
+  .row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
+  button { border: none; border-radius: 8px; padding: 10px 18px; font-size: 14px; cursor: pointer; background: #1a73e8; color: #fff; }
+  button:disabled { background: #ccc; cursor: not-allowed; }
+  button.secondary { background: #eef1f5; color: #222; }
+  button.danger { background: #e8e8e8; color: #666; }
+  .hint { font-size: 12px; color: #888; margin-top: 8px; line-height: 1.6; }
+  .err { color: #c5221f; background: #fdecea; border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 10px; display: none; white-space: pre-wrap; }
+  .ok { color: #137333; background: #e6f4ea; border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 10px; display: none; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #f0f0f0; }
+  th { color: #888; font-weight: 400; font-size: 12px; }
+  .fname { cursor: pointer; color: #1a73e8; word-break: break-all; }
+  .fname.dir { font-weight: 600; }
+  .crumb { font-size: 13px; color: #666; margin-bottom: 8px; }
+  .crumb b { color: #222; }
+  .bar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin-top: 8px; }
+  .bar > div { height: 100%; background: #1a73e8; width: 0%; transition: width .3s; }
+  .jobinfo { font-size: 13px; color: #333; margin-top: 6px; line-height: 1.6; }
+  .muted { color: #888; font-size: 12px; }
+  a.dl { color: #1a73e8; text-decoration: none; }
+  .footer { text-align: center; color: #aaa; font-size: 12px; margin-top: 20px; line-height: 1.8; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>通用网盘</h1>
+  <div class="sub">粘贴任意网盘的分享链接，就能下载并解压里面的文件。免费，不用登录自己的网盘账号。</div>
+  <div class="chips" id="chips"></div>
+
+  <div class="card">
+    <textarea id="linkInput" placeholder="粘贴分享链接（可连同提取码一起粘贴，如：https://pan.baidu.com/s/1xxx?pwd=0000 提取码：0000）"></textarea>
+    <div class="row">
+      <button id="parseBtn" onclick="parseLink()">解析链接</button>
+      <span class="muted" id="parseState"></span>
+    </div>
+    <div class="err" id="errBox"></div>
+    <div class="ok" id="okBox"></div>
+    <div class="hint">支持的分享链接：百度网盘、夸克网盘、UC、迅雷、139云盘、123盘、115、光鸭、蓝奏云。提取码会自动从链接或文案里识别，不用单独填。只下载你提供的分享文件；需要登录才能下的分享会明确告诉你。</div>
+  </div>
+
+  <div class="card" id="fileCard" style="display:none">
+    <div class="crumb" id="crumb"></div>
+    <div class="row" style="margin:0 0 8px">
+      <button class="secondary" onclick="downloadSelected(false)">下载选中</button>
+      <button class="secondary" onclick="downloadSelected(true)">下载全部</button>
+      <button class="danger" onclick="goUp()" id="upBtn" style="display:none">返回上级</button>
+      <span class="muted" id="fileCount"></span>
+    </div>
+    <table>
+      <thead><tr><th style="width:28px"><input type="checkbox" id="checkAll" onchange="toggleAll(this.checked)"></th><th>文件名</th><th style="width:90px">大小</th></tr></thead>
+      <tbody id="fileList"></tbody>
+    </table>
+  </div>
+
+  <div class="card" id="jobCard" style="display:none">
+    <div class="jobinfo" id="jobInfo">等待开始…</div>
+    <div class="bar"><div id="jobBar"></div></div>
+  </div>
+
+  <div class="card" id="resultCard" style="display:none">
+    <b>解压结果</b>
+    <div class="row" style="margin:8px 0">
+      <button class="secondary" id="packBtn" onclick="downloadPack()">打包下载全部（zip）</button>
+      <span class="muted" id="resultCount"></span>
+    </div>
+    <table>
+      <thead><tr><th>文件</th><th style="width:90px">大小</th><th style="width:60px"></th></tr></thead>
+      <tbody id="resultList"></tbody>
+    </table>
+  </div>
+
+  <div class="footer">通用网盘 · 免费工具 · 只下载你提供的分享链接<br>百度非会员下载本身限速，如实呈现，不绕过。</div>
+</div>
+
+<script>
+let task = null;
+let curDir = "/";
+let curFiles = [];
+let jobTimer = null;
+
+function fmtSize(n) {
+  if (n == null) return "-";
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + " MB";
+  return (n / 1024 / 1024 / 1024).toFixed(2) + " GB";
+}
+function showErr(msg) { const e = document.getElementById("errBox"); e.textContent = msg; e.style.display = "block"; document.getElementById("okBox").style.display = "none"; }
+function showOk(msg) { const e = document.getElementById("okBox"); e.textContent = msg; e.style.display = "block"; document.getElementById("errBox").style.display = "none"; }
+function hideMsg() { document.getElementById("errBox").style.display = "none"; document.getElementById("okBox").style.display = "none"; }
+
+async function loadProviders() {
+  try {
+    const r = await fetch("/api/providers");
+    const list = await r.json();
+    document.getElementById("chips").innerHTML = list.map(p =>
+      `<span class="chip${p.guest_download === false ? " todo" : ""}">${p.name}${p.guest_download === false ? "（仅解析，下载需登录）" : ""}</span>`).join("");
+  } catch (e) { /* ignore */ }
+}
+loadProviders();
+
+async function parseLink() {
+  const text = document.getElementById("linkInput").value.trim();
+  if (!text) { showErr("请先粘贴分享链接"); return; }
+  hideMsg();
+  document.getElementById("parseState").textContent = "解析中…";
+  document.getElementById("parseBtn").disabled = true;
+  try {
+    const r = await fetch("/api/parse", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "解析失败");
+    task = data;
+    curDir = "/";
+    showOk(`解析成功：${data.platform_name}「${data.title}」`);
+    renderFiles(data.files, "/");
+    document.getElementById("fileCard").style.display = "block";
+    document.getElementById("resultCard").style.display = "none";
+    document.getElementById("jobCard").style.display = "none";
+  } catch (e) { showErr(e.message); }
+  document.getElementById("parseState").textContent = "";
+  document.getElementById("parseBtn").disabled = false;
+}
+
+function renderFiles(files, dir) {
+  curFiles = files;
+  curDir = dir;
+  document.getElementById("crumb").innerHTML = `当前目录：<b>${dir}</b>　${task ? task.platform_name + "「" + task.title + "」" : ""}`;
+  document.getElementById("fileCount").textContent = `共 ${files.length} 项`;
+  document.getElementById("upBtn").style.display = (dir !== "/" && dir !== "0") ? "inline-block" : "none";
+  document.getElementById("checkAll").checked = false;
+  const tb = document.getElementById("fileList");
+  tb.innerHTML = files.map((f, i) => `<tr>
+    <td><input type="checkbox" class="fileCheck" data-i="${i}"></td>
+    <td><span class="fname${f.is_dir ? " dir" : ""}" onclick="openItem(${i})">${f.is_dir ? "📁 " : "📄 "}${esc(f.name)}</span></td>
+    <td>${f.is_dir ? "-" : fmtSize(f.size)}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">空目录</td></tr>`;
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+async function openItem(i) {
+  const f = curFiles[i];
+  if (!f.is_dir) return;
+  const ref = task.platform === "baidu" ? f.path : f.fid;
+  try {
+    const r = await fetch(`/api/tasks/${task.id}/list`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dir: ref }) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "打开目录失败");
+    renderFiles(data.files, f.name);
+    task._dirStack = task._dirStack || [];
+    task._dirStack.push({ dir: curDir, files: curFiles });
+  } catch (e) { showErr(e.message); }
+}
+function goUp() {
+  if (task._dirStack && task._dirStack.length) {
+    const prev = task._dirStack.pop();
+    renderFiles(prev.files, prev.dir);
+  } else { renderFiles(task.files, "/"); }
+}
+function toggleAll(checked) { document.querySelectorAll(".fileCheck").forEach(c => c.checked = checked); }
+
+function selectedItems(all) {
+  if (all) return curFiles.map(f => ({ fid: f.fid, name: f.name, size: f.size, is_dir: f.is_dir, path: f.path, fid_token: f.fid_token }));
+  const out = [];
+  document.querySelectorAll(".fileCheck:checked").forEach(c => { const f = curFiles[+c.dataset.i]; out.push({ fid: f.fid, name: f.name, size: f.size, is_dir: f.is_dir, path: f.path, fid_token: f.fid_token }); });
+  return out;
+}
+
+async function downloadSelected(all) {
+  if (!task) return;
+  const items = selectedItems(all);
+  if (!items.length) { showErr("请先勾选要下载的文件（或点“下载全部”）"); return; }
+  hideMsg();
+  document.getElementById("jobCard").style.display = "block";
+  document.getElementById("resultCard").style.display = "none";
+  try {
+    const r = await fetch(`/api/tasks/${task.id}/download`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "开始下载失败");
+    pollJob(data.job_id);
+  } catch (e) { showErr(e.message); }
+}
+
+function pollJob(jobId) {
+  if (jobTimer) clearInterval(jobTimer);
+  jobTimer = setInterval(async () => {
+    try {
+      const r = await fetch(`/api/jobs/${jobId}`);
+      const j = await r.json();
+      document.getElementById("jobBar").style.width = (j.progress * 100).toFixed(1) + "%";
+      document.getElementById("jobInfo").textContent =
+        `状态：${j.status === "done" ? "完成" : j.status === "failed" ? "失败" : j.status === "running" ? "进行中" : "等待中"}　${j.message || ""}` +
+        (j.total_bytes ? `　${fmtSize(j.done_bytes)} / ${fmtSize(j.total_bytes)}` : "") +
+        (j.current_file ? `　当前：${j.current_file}` : "");
+      if (j.status === "done" || j.status === "failed") {
+        clearInterval(jobTimer);
+        if (j.status === "done") {
+          showOk(j.message || "下载完成");
+          loadResults();
+        } else { showErr(j.message || "下载失败"); }
+      }
+    } catch (e) { /* 下次再试 */ }
+  }, 800);
+}
+
+async function loadResults() {
+  const r = await fetch(`/api/tasks/${task.id}/files`);
+  const data = await r.json();
+  const ex = data.extracted || [];
+  const dl = data.downloaded || [];
+  const list = ex.length ? ex : dl;
+  const dir = ex.length ? "extracted" : "download";
+  document.getElementById("resultCard").style.display = "block";
+  document.getElementById("packBtn").style.display = ex.length ? "inline-block" : "none";
+  document.getElementById("resultCount").textContent = ex.length ? `已解压 ${ex.length} 个文件` : `已下载 ${dl.length} 个文件（非压缩包，无需解压）`;
+  document.getElementById("resultList").innerHTML = list.map(f => `<tr>
+    <td>${esc(f.path)}</td><td>${fmtSize(f.size)}</td>
+    <td><a class="dl" href="/api/tasks/${task.id}/file?dir=${dir}&path=${encodeURIComponent(f.path)}" download>下载</a></td></tr>`).join("");
+}
+function downloadPack() { window.open(`/api/tasks/${task.id}/archive`, "_blank"); }
+</script>
+</body>
+</html>
