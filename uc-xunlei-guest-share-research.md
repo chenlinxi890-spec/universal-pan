@@ -1,7 +1,7 @@
 # UC 网盘与迅雷网盘：游客分享解析流程调研
 
 来源（只读源码，未联网、未写代码）：
-- `~/workspace/universal-pan/reference/yunx-desktop/desktop/src/main/kotlin/com/yunx/app/data/network/UCApi.kt`、`UCConstants.kt`
+- YunX-Desktop 上游仓库 `desktop/src/main/kotlin/com/yunx/app/data/network/UCApi.kt`、`UCConstants.kt`
 - 同目录 `XunleiApi.kt`、`XunleiConstants.kt`、`XunleiKouling.kt`、`XunleiWebCredential.kt`
 - 分享链接正则参考同目录 `ShareLinkParser.kt`
 
